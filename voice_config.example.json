@@ -1,0 +1,14 @@
+{
+  "trigger_button": "right",
+  "hold_to_record_ms": 350,
+  "sample_rate": 16000,
+  "model": "base",
+  "device": "cpu",
+  "compute_type": "int8",
+  "language": "zh",
+  "output_chinese": "simplified",
+  "streaming_model_dir": "models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+  "recognizer_threads": 2,
+  "vad_filter": true,
+  "restore_clipboard": true
+}

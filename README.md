@@ -1,6 +1,6 @@
 # VoiceHold
 
-> **按住鼠标，说话；文字就出现在你正在输入的地方。**  
+> **按住鼠标，说话；文字就出现在你正在输入的地方。**
 > *Hold a mouse button, speak naturally, and dictate directly into the focused text field.*
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows)](#requirements)

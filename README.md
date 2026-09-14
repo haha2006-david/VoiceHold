@@ -1,96 +1,138 @@
-# VoiceHold — Windows 全局按住说话输入
+# VoiceHold
 
-> Hold a mouse button, speak naturally, and see Chinese text appear directly in the focused input box.
+> **按住鼠标，说话；文字就出现在你正在输入的地方。**  
+> *Hold a mouse button, speak naturally, and dictate directly into the focused text field.*
 
-**VoiceHold** 是一个本地优先的 Windows 语音输入小工具：在任何可编辑输入框中按住鼠标键说话，识别文字会实时写入光标所在的位置。松开即结束，不弹窗、不需要确认，之后就像普通文字一样修改。
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?logo=windows)](#requirements)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](#quick-start)
+[![License](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
-> [!NOTE]
-> 项目仍处于早期阶段，欢迎用 Issue 反馈「应用名称、系统版本、触发方式、实际效果」；这会直接帮助改善兼容性与准确率。
+VoiceHold 是一款本地优先的 Windows 全局语音输入工具。将光标放在任意可编辑文本框中，按住鼠标键说话，中文转写会实时插入到光标位置；松开鼠标后即可像普通文字一样继续编辑。
 
-默认使用本地流式中文识别模型（sherpa-onnx Zipformer），音频只在本机处理。它会在大约 100–300 ms 的音频块到达时持续解码，而不是等整句话结束后才转写。
+没有悬浮转写窗、没有确认按钮，也不需要切换到特定软件。
 
-## 特性
+## Why VoiceHold?
 
-- 全局触发：不必切换到特定软件，先选中输入框即可使用。
-- 直接写入：没有悬浮转写窗，也没有额外确认步骤。
-- 实时识别：边说边生成，只替换仍在变化的词尾，减少文字闪动。
-- 本地处理：麦克风音频不上传到云端。
-- 简体中文输出：内置繁转简；也可在配置中保留原始繁体结果。
+- **即时输入**：边说边显示，而非整句话结束后才出现。
+- **全局可用**：网页、聊天软件、笔记和编辑器等常规输入框均可使用。
+- **本地识别**：语音由本机的流式中文识别模型处理，不上传录音。
+- **少闪动更新**：仅替换仍在变化的识别词尾，稳定文字不会反复跳动。
+- **中文友好**：默认输出简体中文；也支持保留原始繁体结果。
 
-## 当前交互
+## Demo
 
-- 短按配置的按钮：照常发送一次点击，不影响普通点击。
-- 长按 350 ms：开始录音，当前输入框会持续更新识别文字。
-- 松开鼠标：最后结果直接保留在当前输入框，不弹窗、不要求确认。
-- 默认触发键为右键。使用右键意味着该按键不能用于拖拽；使用左键也会妨碍拖拽和长按选择，所以建议只选自己不常用于拖拽的按键。
-- 密码框、远程桌面、以管理员身份运行的程序和禁止粘贴的应用，可能不会接收文字。这是 Windows 的权限/控件限制。
+```text
+1. 点击一个文本输入框
+2. 按住右键并开始说话
+3. 文字实时出现 → 松开右键 → 像普通文字一样修改或发送
+```
 
-## 安装与启动
+> 正在寻找一段清晰的 GIF 演示。欢迎提交你在不同软件中的使用录屏。
 
-需要 Windows 10/11、Python 3.10+，以及可用麦克风。
+## Requirements
+
+- Windows 10 或 Windows 11
+- Python 3.10+
+- 一个可用麦克风
+- 首次下载模型需要网络；完成下载后，日常识别可离线使用
+
+## Quick start
+
+在 PowerShell 中运行：
 
 ```powershell
-cd "C:\Users\yangj\Documents\ChatGPT\有意思的小项目"
+git clone https://github.com/haha2006-david/VoiceHold.git
+cd VoiceHold
+
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 创建个人配置并下载默认实时模型（约 160 MB）
 .\.venv\Scripts\python.exe voice_type.py --write-default-config
 .\.venv\Scripts\python.exe voice_type.py --download-streaming-model
+
+# 启动
 .\.venv\Scripts\python.exe voice_type.py
 ```
 
-如果第二步提示 `.venv` 中没有 `pip`（某些 Python 版本在中文路径下会出现），先补一次：
+看到“已就绪”后，先点击需要输入的文本框，再**按住右键说话**。短按右键仍会正常点击；长按默认 350 ms 后才开始录音。按 `Ctrl+C` 可退出。
+
+如果虚拟环境缺少 pip，可先运行：
 
 ```powershell
 py -m pip --python .\.venv\Scripts\python.exe install --upgrade pip
 ```
 
-然后重新执行安装依赖的那一行即可。
+## Configuration
 
-标准模型下载约 160 MB，只需执行一次。看到“已就绪”后，先点击任意输入框，再按住右键说话；文字会直接在该输入框中逐步生成。
-
-要结束程序，回到它所在的终端按 `Ctrl+C`，或直接关闭终端窗口。
-
-## 调整配置
-
-首次执行 `--write-default-config` 会建立被 Git 忽略的 `voice_config.json`：
+首次启动时创建的 `voice_config.json` 仅存放在你的本机，不会被 Git 跟踪。常用配置如下：
 
 ```json
 {
   "trigger_button": "right",
   "hold_to_record_ms": 350,
-  "language": "zh",
   "output_chinese": "simplified",
   "streaming_model_dir": "models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
-  "recognizer_threads": 2
+  "recognizer_threads": 2,
+  "render_interval_ms": 180
 }
 ```
 
-- 将 `trigger_button` 改为 `left`，可改用左键长按。
-- `hold_to_record_ms` 建议 250–500，避免普通点击误触发。
-- 默认 `output_chinese: "simplified"`，会在粘贴前将繁体转换为简体；如要保留模型原始输出，改为 `"original"`。
-- `recognizer_threads` 默认是 2。电脑较慢时设为 1；若 CPU 空闲较多可设为 3–4，以降低实时输入延迟。
-- 若更重视准确率，可将 `streaming_model_dir` 改为 `models/sherpa-onnx-streaming-zipformer-zh-xlarge-int8-2025-06-30`，再运行下载命令。该模型约 730 MB，适合网络稳定、磁盘空间充足的电脑。
+| 选项 | 作用 | 建议 |
+| --- | --- | --- |
+| `trigger_button` | 触发键，`right` 或 `left` | 默认 `right`；左右键均会影响原有长按操作 |
+| `hold_to_record_ms` | 长按多久后开始录音 | 250–500 ms |
+| `output_chinese` | 输出文字形式 | `simplified` 或 `original` |
+| `recognizer_threads` | 识别线程数 | 低配电脑用 1；CPU 空闲较多可用 3–4 |
+| `render_interval_ms` | 屏幕更新间隔 | 120–220 ms 通常较自然 |
 
-## 打包成 EXE（可选）
+### Accuracy mode
 
-确认能运行后，可执行：
+默认模型约 160 MB，启动与下载更轻量。更重视中文准确率时，可把配置中的 `streaming_model_dir` 改为：
+
+```text
+models/sherpa-onnx-streaming-zipformer-zh-xlarge-int8-2025-06-30
+```
+
+随后再次运行 `--download-streaming-model` 下载 xlarge 模型（约 730 MB）。模型越大，对磁盘、内存和 CPU 的要求也越高。
+
+## Compatibility and limitations
+
+VoiceHold 通过 Windows 的标准输入事件向当前焦点控件写入文字。常规桌面应用与浏览器输入框通常适用，但下列场景可能受系统或应用限制：
+
+- 密码框、安全桌面和远程桌面会话
+- 以管理员身份运行的应用（VoiceHold 与目标应用权限不同）
+- 明确禁止模拟输入或粘贴的应用
+- 游戏、全屏独占程序和某些自绘控件
+
+请勿把它用于输入密码、支付信息或其他敏感内容。VoiceHold 不会主动上传音频，但你仍应了解所使用应用本身的数据政策。
+
+## Build an EXE
+
+确认脚本版运行正常后，可在本机打包：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install pyinstaller
-.\.venv\Scripts\pyinstaller.exe --onefile --name VoiceType voice_type.py
+.\.venv\Scripts\pyinstaller.exe --onefile --name VoiceHold voice_type.py
 ```
 
-生成文件在 `dist\VoiceType.exe`。`voice_config.json` 放在 EXE 同级目录后，程序会自动读取它；也可以用 `--config` 指向其他位置。
+生成文件位于 `dist\VoiceHold.exe`。将个人 `voice_config.json` 放在 EXE 同级目录即可使用；模型目录也需要保留在同级的 `models` 文件夹中。
 
-## 后续最值得做的两项
+## Roadmap
 
-1. 加一个系统托盘图标，显示“聆听/转写/失败”，不必保留终端窗口。
-2. 改用鼠标侧键或可自定义组合键。它比左右键更自然，也不会抢占常用的菜单、拖拽和选中文本操作。
+- [ ] 系统托盘图标与状态提示
+- [ ] 鼠标侧键、快捷键等更多触发方式
+- [ ] 可下载的签名 EXE 发布包
+- [ ] 更多应用的兼容性测试与回归测试
 
-## 参与贡献
+## Contributing
 
-欢迎提交 Bug 报告、兼容性测试结果、改进建议和 Pull Request。提交问题时，请不要上传录音、密码或其他敏感输入内容。
+欢迎提交 Issue、兼容性反馈和 Pull Request。报告问题时，请写明 Windows 版本、目标应用、触发方式和复现步骤；请勿附上录音、密码或其他敏感输入内容。
 
-## 许可证
+## Acknowledgements
 
-本项目使用 [MIT License](LICENSE)。语音识别模型及其许可证请以各自上游发布说明为准。
+VoiceHold 使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 提供的本地流式语音识别能力，以及其发布的中文模型。
+
+## License
+
+[MIT License](LICENSE) © VoiceHold contributors.

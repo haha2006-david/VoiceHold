@@ -4,3 +4,4 @@ __pycache__/
 voice_config.json
 models/
 debug_audio/
+VoiceHold-autostart.vbs

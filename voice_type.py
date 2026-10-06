@@ -413,6 +413,8 @@ KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
 WM_QUIT = 0x0012
+ERROR_ALREADY_EXISTS = 183
+INSTANCE_MUTEX_NAME = "Local\\VoiceHold-GlobalDictation"
 
 ULONG_PTR = wintypes.WPARAM
 
@@ -484,6 +486,21 @@ user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
 user32.SendInput.argtypes = [wintypes.UINT, ct.POINTER(INPUT), ct.c_int]
 user32.SendInput.restype = wintypes.UINT
+kernel32.CreateMutexW.argtypes = [ct.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def _claim_single_instance() -> wintypes.HANDLE | None:
+    """Return a process-held mutex, or None when VoiceHold already runs."""
+    handle = kernel32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
+    if not handle:
+        raise ct.WinError(ct.get_last_error())
+    if ct.get_last_error() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        return None
+    return handle
 
 
 def _send_virtual_key(key: int) -> None:
@@ -590,10 +607,15 @@ def main() -> int:
         args.config.write_text(json.dumps(asdict(Config()), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"已创建：{args.config}")
         return 0
+    instance_mutex: wintypes.HANDLE | None = None
     try:
         config = load_config(args.config)
         if args.download_streaming_model:
             return download_streaming_model(config)
+        instance_mutex = _claim_single_instance()
+        if instance_mutex is None:
+            print("VoiceHold 已在运行。", flush=True)
+            return 0
         dictation = DictationService(config)
         hook = GlobalMouseHook(config, dictation)
         signal.signal(signal.SIGINT, lambda _signum, _frame: hook.stop())
@@ -606,6 +628,8 @@ def main() -> int:
     finally:
         if "hook" in locals():
             hook.stop()
+        if instance_mutex:
+            kernel32.CloseHandle(instance_mutex)
     return 0
 
 

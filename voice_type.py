@@ -13,6 +13,8 @@ from ctypes import wintypes
 from dataclasses import asdict, dataclass, fields
 import json
 import logging
+from logging.handlers import RotatingFileHandler
+import os
 from pathlib import Path
 import queue
 import signal
@@ -36,6 +38,7 @@ from core import HoldToTalk, ReleaseResult
 # editable configuration should live beside the executable instead.
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "voice_config.json"
+LOG_DIR = APP_DIR / "logs"
 EXAMPLE_CONFIG_PATH = APP_DIR / "voice_config.example.json"
 STREAMING_MODEL_NAME = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
 STREAMING_MODEL_URL = (
@@ -262,7 +265,6 @@ class DictationService:
                 return
             self._session += 1
             session = self._session
-            self._recording = True
             audio_queue: queue.Queue[np.ndarray | None] = queue.Queue()
             self._audio_queue = audio_queue
 
@@ -270,6 +272,7 @@ class DictationService:
                 audio_queue.put_nowait(samples)
 
             self._recorder.start(on_audio)
+            self._recording = True
             self._injector.begin(session, target_window)
         threading.Thread(
             target=self._stream_audio,
@@ -278,6 +281,7 @@ class DictationService:
             daemon=True,
         ).start()
         print("● 正在实时输入…", flush=True)
+        logging.info("Microphone recording started; session=%s", session)
 
     def stop_recording(self) -> None:
         with self._lock:
@@ -288,6 +292,7 @@ class DictationService:
             self._recorder.stop()
             audio_queue.put(None)
         print("◌ 正在完成最后几个字…", flush=True)
+        logging.info("Microphone recording stopped; session=%s", self._session)
 
     def _stream_audio(
         self,
@@ -311,6 +316,7 @@ class DictationService:
                     text = self._normalize(self._recognizer.get_result(stream))
                     self._injector.finish(session, text or last_text)
                     print(f"✓ {text or last_text}", flush=True)
+                    logging.info("Dictation completed; characters=%s", len(text or last_text))
                     return
                 stream.accept_waveform(self._config.sample_rate, samples)
                 self._decode_ready(stream)
@@ -414,7 +420,9 @@ KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
 WM_QUIT = 0x0012
 ERROR_ALREADY_EXISTS = 183
-INSTANCE_MUTEX_NAME = "Local\\VoiceHold-GlobalDictation"
+INSTANCE_MUTEX_NAME = "Local\\VoiceHold-GlobalDictation-v2"
+WM_TIMER = 0x0113
+HOOK_REFRESH_TIMER = 1
 
 ULONG_PTR = wintypes.WPARAM
 
@@ -486,6 +494,10 @@ user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
 user32.SendInput.argtypes = [wintypes.UINT, ct.POINTER(INPUT), ct.c_int]
 user32.SendInput.restype = wintypes.UINT
+user32.SetTimer.argtypes = [wintypes.HWND, ULONG_PTR, wintypes.UINT, ct.c_void_p]
+user32.SetTimer.restype = ULONG_PTR
+user32.KillTimer.argtypes = [wintypes.HWND, ULONG_PTR]
+user32.KillTimer.restype = wintypes.BOOL
 kernel32.CreateMutexW.argtypes = [ct.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
 kernel32.CreateMutexW.restype = wintypes.HANDLE
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -494,6 +506,7 @@ kernel32.CloseHandle.restype = wintypes.BOOL
 
 def _claim_single_instance() -> wintypes.HANDLE | None:
     """Return a process-held mutex, or None when VoiceHold already runs."""
+    ct.set_last_error(0)
     handle = kernel32.CreateMutexW(None, False, INSTANCE_MUTEX_NAME)
     if not handle:
         raise ct.WinError(ct.get_last_error())
@@ -534,13 +547,42 @@ class GlobalMouseHook:
             self._down_message, self._up_message = WM_RBUTTONDOWN, WM_RBUTTONUP
             self._down_flag, self._up_flag = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
         self._dictation = dictation
-        self._controller = HoldToTalk(config.hold_to_record_ms / 1_000, self._start_dictation, dictation.stop_recording)
+        self._controller = HoldToTalk(config.hold_to_record_ms / 1_000, self._queue_start, self._queue_stop)
+        self._commands: queue.Queue[tuple[str, int]] = queue.Queue()
+        self._pressed = False
+        self._press_target = 0
+        self._timer_id = 0
         self._handle: wintypes.HHOOK | None = None
         self._thread_id: int | None = None
         self._callback = LowLevelMouseProc(self._mouse_proc)
 
     def run(self) -> None:
         self._thread_id = kernel32.GetCurrentThreadId()
+        threading.Thread(target=self._recording_worker, name="recording-control", daemon=True).start()
+        self._install_hook()
+        self._timer_id = user32.SetTimer(None, HOOK_REFRESH_TIMER, 15_000, None)
+        if not self._timer_id:
+            raise ct.WinError(ct.get_last_error())
+        logging.info("READY pid=%s; mouse hook installed", os.getpid())
+        print("已就绪：按住说话时，文字会直接出现在当前输入框。按 Ctrl+C 退出。", flush=True)
+        message = wintypes.MSG()
+        try:
+            while user32.GetMessageW(ct.byref(message), None, 0, 0) > 0:
+                if message.message == WM_TIMER and message.wParam == self._timer_id:
+                    # Windows silently removes slow hooks; a message-loop timer
+                    # also restores listening after sleep/resume without touching
+                    # microphone state during an active mouse hold.
+                    if not self._pressed:
+                        self._install_hook()
+                    continue
+                user32.TranslateMessage(ct.byref(message))
+                user32.DispatchMessageW(ct.byref(message))
+        finally:
+            self.stop()
+
+    def _install_hook(self) -> None:
+        if self._handle:
+            user32.UnhookWindowsHookEx(self._handle)
         self._handle = user32.SetWindowsHookExW(
             # A low-level hook executes its callback in this process. Passing
             # Python's EXE as hmod makes Windows try to load it as a hook DLL
@@ -549,18 +591,11 @@ class GlobalMouseHook:
         )
         if not self._handle:
             raise ct.WinError(ct.get_last_error())
-        print("已就绪：按住说话时，文字会直接出现在当前输入框。按 Ctrl+C 退出。", flush=True)
-        message = wintypes.MSG()
-        try:
-            while user32.GetMessageW(ct.byref(message), None, 0, 0) > 0:
-                user32.TranslateMessage(ct.byref(message))
-                user32.DispatchMessageW(ct.byref(message))
-        finally:
-            if self._handle:
-                user32.UnhookWindowsHookEx(self._handle)
-                self._handle = None
 
     def stop(self) -> None:
+        if self._timer_id:
+            user32.KillTimer(None, self._timer_id)
+            self._timer_id = 0
         if self._handle:
             user32.UnhookWindowsHookEx(self._handle)
             self._handle = None
@@ -574,9 +609,12 @@ class GlobalMouseHook:
         if info.flags & LLMHF_INJECTED:
             return user32.CallNextHookEx(self._handle, n_code, w_param, l_param)
         if w_param == self._down_message:
+            self._pressed = True
+            self._press_target = int(user32.GetForegroundWindow() or 0)
             self._controller.press()
             return 1
         if w_param == self._up_message:
+            self._pressed = False
             result = self._controller.release()
             if result == ReleaseResult.TAP:
                 user32.mouse_event(self._down_flag, 0, 0, 0, 0)
@@ -584,10 +622,24 @@ class GlobalMouseHook:
             return 1
         return user32.CallNextHookEx(self._handle, n_code, w_param, l_param)
 
-    def _start_dictation(self) -> None:
-        # The original input keeps focus throughout the live transcription.
-        target_window = int(user32.GetForegroundWindow() or 0)
-        self._dictation.start_recording(target_window)
+    def _queue_start(self) -> None:
+        self._commands.put_nowait(("start", self._press_target))
+
+    def _queue_stop(self) -> None:
+        self._commands.put_nowait(("stop", 0))
+
+    def _recording_worker(self) -> None:
+        # Serialize microphone start/stop outside the hook callback. PortAudio
+        # can block on driver operations; the hook must return immediately.
+        while True:
+            command, target = self._commands.get()
+            try:
+                if command == "start":
+                    self._dictation.start_recording(target)
+                else:
+                    self._dictation.stop_recording()
+            except Exception:
+                logging.exception("Microphone %s failed", command)
 
 
 def parse_args() -> argparse.Namespace:
@@ -599,6 +651,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    LOG_DIR.mkdir(exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[RotatingFileHandler(LOG_DIR / "voicehold.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
+    )
+    # pythonw has no stdout/stderr. Avoid silent failures from flush or library
+    # diagnostics; operational logs contain counts, never transcript content.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
     args = parse_args()
     if args.write_default_config:
         if args.config.exists():
@@ -614,6 +678,7 @@ def main() -> int:
             return download_streaming_model(config)
         instance_mutex = _claim_single_instance()
         if instance_mutex is None:
+            logging.info("Another VoiceHold instance is running; exiting duplicate pid=%s", os.getpid())
             print("VoiceHold 已在运行。", flush=True)
             return 0
         dictation = DictationService(config)
@@ -623,6 +688,7 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     except Exception as error:
+        logging.exception("VoiceHold startup failed")
         print(f"启动失败：{error}", file=sys.stderr)
         return 1
     finally:

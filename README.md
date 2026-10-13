@@ -63,6 +63,22 @@ py -m venv .venv
 py -m pip --python .\.venv\Scripts\python.exe install --upgrade pip
 ```
 
+## Start with Windows
+
+完成上面的安装、配置和模型下载后，在项目目录运行以下命令，即可让 VoiceHold 在当前用户登录 Windows 后静默启动。无需管理员权限。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
+```
+
+后台启动需要等待模型加载，目前没有托盘图标。程序会定期恢复鼠标监听，并避免新版重复启动。启动状态和错误保存在本机 `logs\voicehold.log`，正常运行日志只记录状态和字数，不记录转写正文。
+
+项目目录移动后，请重新运行安装命令更新路径。取消自启动可运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1 -Remove
+```
+
 ## Configuration
 
 首次启动时创建的 `voice_config.json` 仅存放在你的本机，不会被 Git 跟踪。常用配置如下：
